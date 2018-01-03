@@ -1,5 +1,9 @@
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.collect_list
+import org.apache.spark.ml.feature.StopWordsRemover
+//import org.apache.spark.mllib.feature.Stemmer
+import org.apache.spark.ml.feature.Tokenizer
+
 
 object DataProcessor {
 
@@ -46,9 +50,17 @@ object DataProcessor {
 
         // Return
         (train_df_without_product_names, products.toDF("product_uid", "product_description", "product_attributes", "product_title"))
+
+        removeStopWords(train_df_without_product_names.toDF(),"product_description")
     }
 
-    def process_data(train_df: DataFrame, products_df: DataFrame): Unit = {
+    def removeStopWords(train_df: DataFrame,colToCl:String): Unit = {
+        val remover = new StopWordsRemover()
+          .setInputCol(colToCl)
+          .setOutputCol(colToCl+"_cl")
+
+        remover.transform(train_df).show(false)
+        train_df.head(4).foreach(println)
     }
 
 
