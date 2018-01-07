@@ -40,7 +40,7 @@ object DataProcessor {
         val train_df = spark.read.format("csv").option("header", "true").csv(train_csv)
 
         val attributes_df = spark.read.format("csv").option("header", "true").csv(attributes_csv)
-        val attributes_df_grouped = attributes_df.groupBy(attributes_df.col("product_uid")).agg(collect_list(columnName = "value"))
+        val attributes_df_grouped = attributes_df.groupBy(attributes_df.col("product_uid")).agg(concat_ws(" ", collect_list(columnName = "value")))
         val descriptions_df = spark.read.format("csv").option("header", "true").csv(descriptions_csv)
 
         val train_df_without_product_names = train_df.select("id", "product_uid", "search_term", "relevance")
@@ -51,10 +51,7 @@ object DataProcessor {
             .join(train_df_product_names, Seq("product_uid"), "outer")
             .na.fill("")
 
-//        var attribute_col = products.col("product_attributes")
-//        attribute_col.cast()
-
-        (train_df_without_product_names, products.toDF("product_uid", "product_description", "product_attributes", "product_title"))
+            (train_df_without_product_names, products.toDF("product_uid", "product_description", "product_attributes", "product_title"))
     }
 
     def process_data(products: DataFrame): DataFrame = {
