@@ -1,16 +1,24 @@
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import org.apache.spark.sql.functions.collect_list
+import org.apache.spark.sql.functions._
 import org.apache.spark.ml.feature.StopWordsRemover
 //import org.apache.spark.mllib.feature.Stemmer
 import org.apache.spark.ml.feature.Tokenizer
 
+import org.apache.log4j.Logger
+import org.apache.log4j.Level
 
 object DataProcessor {
 
     def main(args: Array[String]): Unit = {
+        Logger.getLogger("org").setLevel(Level.OFF)
+        Logger.getLogger("akka").setLevel(Level.OFF)
+
         val df_tup = read_data("data/train.csv", "data/attributes.csv", "data/product_descriptions.csv")
-        df_tup._1.show(10)
-        df_tup._2.show(10)
+//        df_tup._1.show(10)
+//        df_tup._2.show(10)
+
+        val processed_df = process_data(df_tup._2)
+        processed_df.show(10)
     }
 
     /***
@@ -41,19 +49,39 @@ object DataProcessor {
         val products = descriptions_df
             .join(attributes_df_grouped, Seq("product_uid"), "outer")
             .join(train_df_product_names, Seq("product_uid"), "outer")
+            .na.fill("")
+
+//        var attribute_col = products.col("product_attributes")
+//        attribute_col.cast()
 
         (train_df_without_product_names, products.toDF("product_uid", "product_description", "product_attributes", "product_title"))
-
-        removeStopWords(train_df_without_product_names.toDF(),"product_description")
     }
 
-    def removeStopWords(train_df: DataFrame,colToCl:String): Unit = {
-        val remover = new StopWordsRemover()
-          .setInputCol(colToCl)
-          .setOutputCol(colToCl+"_cl")
+    def process_data(products: DataFrame): DataFrame = {
+        val col_names = Seq("product_description", "product_attributes", "product_title")
+        var dfs = new Array[DataFrame](col_names.length + 1)
 
-        remover.transform(train_df).show(false)
-        train_df.head(4).foreach(println)
+        dfs(0) = products
+        var count = 0
+
+        col_names.foreach(col_name => {
+            val tokenizer = new Tokenizer()
+              .setInputCol(col_name)
+              .setOutputCol(col_name+"_tokenized")
+
+            val remover = new StopWordsRemover()
+              .setInputCol(col_name+"_tokenized")
+              .setOutputCol(col_name+"_clean")
+
+            val tokenized = tokenizer.transform(dfs(count))
+            val clean = remover.transform(tokenized).drop(col_name).drop(col_name+"_tokenized")
+
+            count = count + 1
+            dfs(count) = clean
+        })
+
+        // Return processed dataset
+        dfs(count).toDF("product_uid", "product_description", "product_attributes", "product_title")
     }
 
 }
