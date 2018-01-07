@@ -1,7 +1,8 @@
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.ml.feature.StopWordsRemover
-//import org.apache.spark.mllib.feature.Stemmer
+import org.apache.spark.ml.feature.HashingTF
+import org.apache.spark.ml.feature.IDF
 import org.apache.spark.ml.feature.Tokenizer
 
 import org.apache.log4j.Logger
@@ -70,12 +71,29 @@ object DataProcessor {
               .setInputCol(col_name+"_tokenized")
               .setOutputCol(col_name+"_clean")
 
+            val hash_tf = new HashingTF()
+              .setInputCol(col_name+"_clean")
+              .setOutputCol(col_name+"_tf")
+
+            val idf = new IDF()
+              .setInputCol(col_name+"_tf")
+              .setOutputCol(col_name+"_tfidf")
+
             val tokenized = tokenizer.transform(dfs(count))
-            val clean = remover.transform(tokenized).drop(col_name).drop(col_name+"_tokenized")
+            val clean = remover.transform(tokenized)
+            val tf = hash_tf.transform(clean)
+            val idf_fit = idf.fit(tf)
+            val processed_col_df = idf_fit.transform(tf)
+              .drop(col_name)
+              .drop(col_name+"_tokenized")
+              .drop(col_name+"_clean")
+              .drop(col_name+"_tf")
 
             count = count + 1
-            dfs(count) = clean
+            dfs(count) = processed_col_df
         })
+
+        dfs(count).show(10)
 
         // Return processed dataset
         dfs(count).toDF("product_uid", "product_description", "product_attributes", "product_title")
