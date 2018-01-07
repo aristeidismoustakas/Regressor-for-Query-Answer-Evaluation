@@ -14,11 +14,10 @@ object DataProcessor {
         Logger.getLogger("org").setLevel(Level.OFF)
         Logger.getLogger("akka").setLevel(Level.OFF)
 
-        val df_tup = read_data("data/train.csv", "data/attributes.csv", "data/product_descriptions.csv")
-//        df_tup._1.show(10)
-//        df_tup._2.show(10)
+        val train = read_data("data/train.csv", "data/attributes.csv", "data/product_descriptions.csv")
+        train.show(10)
 
-        val processed_df = process_data(df_tup._2)
+        val processed_df = process_data(train)
         processed_df.show(10)
     }
 
@@ -31,7 +30,7 @@ object DataProcessor {
       * @param descriptions_csv product_descriptions.csv
       * @return Tuple with the 2 DataFrames
       */
-    def read_data(train_csv: String, attributes_csv: String, descriptions_csv: String): (DataFrame, DataFrame) = {
+    def read_data(train_csv: String, attributes_csv: String, descriptions_csv: String): DataFrame = {
         val spark = SparkSession
             .builder()
             .master("local")
@@ -43,20 +42,21 @@ object DataProcessor {
         val attributes_df = spark.read.format("csv").option("header", "true").csv(attributes_csv)
         val attributes_df_grouped = attributes_df.groupBy(attributes_df.col("product_uid")).agg(concat_ws(" ", collect_list(columnName = "value")))
         val descriptions_df = spark.read.format("csv").option("header", "true").csv(descriptions_csv)
+//
+//        val train_df_without_product_names = train_df.select("id", "product_uid", "search_term", "relevance")
+//        val train_df_product_names = train_df.select("product_uid", "product_title").dropDuplicates("product_uid")
 
-        val train_df_without_product_names = train_df.select("id", "product_uid", "search_term", "relevance")
-        val train_df_product_names = train_df.select("product_uid", "product_title").dropDuplicates("product_uid")
-
-        val products = descriptions_df
-            .join(attributes_df_grouped, Seq("product_uid"), "outer")
-            .join(train_df_product_names, Seq("product_uid"), "outer")
+        val train = train_df
+            .join(attributes_df_grouped, Seq("product_uid"), "left_outer")
+            .join(descriptions_df, Seq("product_uid"), "left_outer")
             .na.fill("")
 
-            (train_df_without_product_names, products.toDF("product_uid", "product_description", "product_attributes", "product_title"))
+        train.toDF("product_uid", "id", "product_title",
+            "search_term", "relevance", "product_attributes", "product_description")
     }
 
     def process_data(products: DataFrame): DataFrame = {
-        val col_names = Seq("product_description", "product_attributes", "product_title")
+        val col_names = Seq("search_term", "product_description", "product_attributes", "product_title")
         var dfs = new Array[DataFrame](col_names.length + 1)
 
         dfs(0) = products
@@ -93,10 +93,8 @@ object DataProcessor {
             dfs(count) = processed_col_df
         })
 
-        dfs(count).show(10)
-
         // Return processed dataset
-        dfs(count).toDF("product_uid", "product_description", "product_attributes", "product_title")
+        dfs(count)
     }
 
 }
