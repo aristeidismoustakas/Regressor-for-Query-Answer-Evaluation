@@ -10,8 +10,10 @@ import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 import breeze.linalg.functions.cosineDistance
 import org.apache.log4j.Logger
 import org.apache.log4j.Level
+import org.apache.spark.ml.Pipeline
 import org.apache.spark.ml.evaluation.RegressionEvaluator
 import org.apache.spark.ml.regression.RandomForestRegressor
+import org.apache.spark.mllib.feature.Stemmer
 
 object DataProcessor {
 
@@ -118,26 +120,32 @@ object DataProcessor {
                 .setOutputCol(col_name+"_tokenized")
 
             val remover = new StopWordsRemover()
-                .setInputCol(col_name+"_tokenized")
+                .setInputCol(tokenizer.getOutputCol)
                 .setOutputCol(col_name+"_clean")
+
+            val stemmer = new Stemmer()
+                .setInputCol(remover.getOutputCol)
+                .setOutputCol(col_name+"_stemmed")
 
             val hash_tf = new HashingTF()
                 .setNumFeatures(20000)
-                .setInputCol(col_name+"_clean")
+                .setInputCol(stemmer.getOutputCol)
                 .setOutputCol(col_name+"_tf")
 
             val idf = new IDF()
-              .setInputCol(col_name+"_tf")
-              .setOutputCol(col_name+"_tfidf_sparse")
+                .setInputCol(hash_tf.getOutputCol)
+                .setOutputCol(col_name+"_tfidf_sparse")
 
             val tokenized = tokenizer.transform(dfs(count))
             val clean = remover.transform(tokenized)
-            val tf = hash_tf.transform(clean)
+            val stemmed = stemmer.transform(clean)
+            val tf = hash_tf.transform(stemmed)
             val idf_fit = idf.fit(tf)
             val processed_col_df = idf_fit.transform(tf)
                 .drop(col_name)
                 .drop(col_name+"_tokenized")
                 .drop(col_name+"_clean")
+                .drop(col_name+"_stemmed")
                 .drop(col_name+"_tf")
 
 
