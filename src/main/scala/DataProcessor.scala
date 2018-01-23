@@ -13,11 +13,15 @@ import org.apache.log4j.Level
 import org.apache.spark.ml.Pipeline
 import org.apache.spark.ml.evaluation.RegressionEvaluator
 import org.apache.spark.ml.regression.RandomForestRegressor
+import org.apache.spark.ml.regression.DecisionTreeRegressor
+import org.apache.spark.ml.regression.LinearRegression
 import org.apache.spark.mllib.feature.Stemmer
 
 object DataProcessor {
 
     def main(args: Array[String]): Unit = {
+        // This function should be moved to a new file, which will be the entry point to the program
+
         val t0 = System.currentTimeMillis()
 
         Logger.getLogger("org").setLevel(Level.OFF)
@@ -25,32 +29,42 @@ object DataProcessor {
 
         val toDouble = udf[Double, String]( _.toDouble)
 
-        val train_rel_str = read_data("data/train.csv", "data/attributes.csv", "data/product_descriptions.csv").toDF("product_uid", "id", "product_title",
-            "search_term", "relevance", "product_attributes", "product_description")
+        // Read training set
+        val train_rel_str = read_data("data/train.csv", "data/attributes.csv", "data/product_descriptions.csv")
+          .toDF("product_uid", "id",
+              "product_title", "search_term",
+              "relevance", "product_attributes",
+              "product_description")
 
+        // Cast relevance to double
         val train = train_rel_str.withColumn("rel_num", toDouble(train_rel_str.col("relevance"))).drop("relevance").withColumnRenamed("rel_num", "relevance")
 //
 //        val test = read_data("data/test.csv", "data/attributes.csv", "data/product_descriptions.csv").toDF("product_uid", "id", "product_title",
 //            "search_term", "product_attributes", "product_description")
 
+        // Process training set
         val processed_train_df = process_data(train)
 //        val processed_test_df = process_data(test)
 
         processed_train_df.show(10)
 //        processed_test_df.show(10)
 
+        // Split into training and validation set - 70%/30%
         val split = processed_train_df.randomSplit(Array(0.7, 0.3), seed=42)
 
         val training_set = split(0)
         val validation_set = split(1)
 
-        val rf = new RandomForestRegressor()
+        // Train model
+        val rf = new DecisionTreeRegressor()
             .setLabelCol("relevance")
             .setFeaturesCol("features")
             .fit(training_set)
 
+        // Get predictions
         val predictions = rf.transform(validation_set)
 
+        // Evaluate model
         val evaluator = new RegressionEvaluator()
             .setLabelCol("relevance")
             .setPredictionCol("prediction")
@@ -100,8 +114,10 @@ object DataProcessor {
 
     def process_data(products: DataFrame): DataFrame = {
         val col_names = Seq("search_term", "product_description", "product_attributes", "product_title")
+        // Array to keep dataframes after each iteration
         var dfs = new Array[DataFrame](col_names.length + 1)
 
+        // User Defined Function to calculate cosine similarities between two columns
         val udf_cos_sim = udf((vec1: DenseVector, vec2: DenseVector) => {
             val vec_1_bdv = BDV(vec1.toDense.toArray)
             val vec_2_bdv = BDV(vec2.toDense.toArray)
@@ -109,12 +125,15 @@ object DataProcessor {
             1 - cosineDistance(vec_1_bdv, vec_2_bdv)
         })
 
+        // First df that will be processed
         dfs(0) = products
         var count = 0
 
+        // User Defined Function to cast sparse to dense vectors
         val udf_toDense = udf((v: SparseVector) => v.toDense)
 
         col_names.foreach(col_name => {
+            // For each column, tokenize, remove stop words, stem and create tfidf vectors
             val tokenizer = new Tokenizer()
                 .setInputCol(col_name)
                 .setOutputCol(col_name+"_tokenized")
@@ -148,24 +167,27 @@ object DataProcessor {
                 .drop(col_name+"_stemmed")
                 .drop(col_name+"_tf")
 
-
+            // Increment count and store current df in array after casting vectors to dense
             count = count + 1
             dfs(count) = processed_col_df
                 .withColumn(col_name+"_tfidf", udf_toDense(processed_col_df.col(col_name+"_tfidf_sparse")))
                 .drop(col_name+"_tfidf_sparse")
         })
 
-        // Return processed dataset
+        // Get latest dataframe, with all columns processed
         val tfidf = dfs(count)
+        // Calculate similarities
         val sims = tfidf
             .withColumn("search_term_title_cos_sim", udf_cos_sim(tfidf.col("search_term_tfidf"), tfidf.col("product_title_tfidf")))
             .withColumn("search_term_desc_cos_sim", udf_cos_sim(tfidf.col("search_term_tfidf"), tfidf.col("product_description_tfidf")))
             .withColumn("search_term_attr_cos_sim", udf_cos_sim(tfidf.col("search_term_tfidf"), tfidf.col("product_attributes_tfidf")))
 
+        // Assemble similarities in vector
         val assembler = new VectorAssembler()
             .setInputCols(Array("search_term_title_cos_sim", "search_term_desc_cos_sim", "search_term_attr_cos_sim"))
             .setOutputCol("features")
 
+        // Transform and return result
         assembler.transform(sims)
     }
 
