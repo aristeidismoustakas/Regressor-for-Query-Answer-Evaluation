@@ -1,14 +1,25 @@
 package queryanswerevaluation
 
-import breeze.linalg.functions.cosineDistance
+import breeze.linalg.functions.{cosineDistance, euclideanDistance, tanimotoDistance}
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
 import org.apache.spark.ml.feature._
-import org.apache.spark.ml.linalg.{DenseVector, SparseVector}
+import org.apache.spark.ml.linalg.{DenseVector, SparseVector, Vectors}
 import org.apache.spark.mllib.feature.Stemmer
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, SparkSession}
 
 object DataProcessor {
+    // User Defined Function to calculate ltr_features between two columns
+    val udf_ltr = udf((vec1: DenseVector, vec2: DenseVector) => {
+        val vec_1_bdv = BDV(vec1.toDense.toArray)
+        val vec_2_bdv = BDV(vec2.toDense.toArray)
+
+        val sims = List(1 - cosineDistance(vec_1_bdv, vec_2_bdv),
+            1 - euclideanDistance(vec_1_bdv, vec_2_bdv),
+            1 - tanimotoDistance(vec_1_bdv, vec_2_bdv))
+
+        Vectors.dense(sims.toArray)
+    })
 
     /***
       * Reads data from CSV files and returns 2 DataFrames
@@ -44,14 +55,6 @@ object DataProcessor {
         val col_names = Seq("search_term", "product_description", "product_attributes", "product_title")
         // Array to keep dataframes after each iteration
         var dfs = new Array[DataFrame](col_names.length + 1)
-
-        // User Defined Function to calculate cosine similarities between two columns
-        val udf_cos_sim = udf((vec1: DenseVector, vec2: DenseVector) => {
-            val vec_1_bdv = BDV(vec1.toDense.toArray)
-            val vec_2_bdv = BDV(vec2.toDense.toArray)
-
-            1 - cosineDistance(vec_1_bdv, vec_2_bdv)
-        })
 
         // First df that will be processed
         dfs(0) = products
@@ -106,14 +109,14 @@ object DataProcessor {
         val tfidf = dfs(count)
         // Calculate similarities
         val sims = tfidf
-            .withColumn("search_term_title_cos_sim", udf_cos_sim(tfidf.col("search_term_tfidf"), tfidf.col("product_title_tfidf")))
-            .withColumn("search_term_desc_cos_sim", udf_cos_sim(tfidf.col("search_term_tfidf"), tfidf.col("product_description_tfidf")))
-            .withColumn("search_term_attr_cos_sim", udf_cos_sim(tfidf.col("search_term_tfidf"), tfidf.col("product_attributes_tfidf")))
+            .withColumn("search_term_title_sims", udf_ltr(tfidf.col("search_term_tfidf"), tfidf.col("product_title_tfidf")))
+            .withColumn("search_term_desc_sims", udf_ltr(tfidf.col("search_term_tfidf"), tfidf.col("product_description_tfidf")))
+            .withColumn("search_term_attr_sims", udf_ltr(tfidf.col("search_term_tfidf"), tfidf.col("product_attributes_tfidf")))
 
         // Assemble similarities in vector
         val assembler = new VectorAssembler()
-            .setInputCols(Array("search_term_title_cos_sim", "search_term_desc_cos_sim", "search_term_attr_cos_sim"))
-            .setOutputCol("features")
+            .setInputCols(Array("search_term_title_sims", "search_term_desc_sims", "search_term_attr_sims"))
+            .setOutputCol("ltr_features")
 
         // Transform and return result
         assembler.transform(sims)

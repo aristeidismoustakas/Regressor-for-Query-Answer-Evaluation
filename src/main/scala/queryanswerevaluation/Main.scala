@@ -2,7 +2,8 @@ package queryanswerevaluation
 
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.ml.evaluation.RegressionEvaluator
-import org.apache.spark.ml.regression.DecisionTreeRegressor
+import org.apache.spark.ml.regression.{DecisionTreeRegressor, GBTRegressor}
+import org.apache.spark.mllib.tree.GradientBoostedTrees
 import org.apache.spark.sql.functions.udf
 import queryanswerevaluation.DataProcessor.{process_data, read_data}
 import org.apache.spark.sql.{DataFrame, SparkSession}
@@ -30,7 +31,7 @@ object Main {
         val toDouble = udf[Double, String]( _.toDouble)
 
         // Read training set
-        val train_rel_str = read_data("data/train.csv", "data/attributes.csv", "data/product_descriptions.csv")
+        val train_rel_str = read_data("data/train_small.csv", "data/attributes.csv", "data/product_descriptions.csv")
             .toDF(train_col_names: _*)
 
         // Cast relevance to double
@@ -40,7 +41,7 @@ object Main {
             .withColumnRenamed("rel_num", "relevance")
 
         // Read test set
-        val test = read_data("data/test.csv", "data/attributes.csv", "data/product_descriptions.csv")
+        val test = read_data("data/test_small.csv", "data/attributes.csv", "data/product_descriptions.csv")
             .toDF(test_col_names:_*)
 
         // Process training set
@@ -54,20 +55,48 @@ object Main {
         val training_set = split(0)
         val validation_set = split(1)
 
-        val regressor_tree_results = train_regressor_tree(training_set, validation_set)
-        println("RMSE: " + regressor_tree_results._2 + " Time: " + regressor_tree_results._3 + "s")
+        val regressor_tree_results = train_regressor_tree(training_set, validation_set, "ltr_features", "relevance")
+        println("Regressor Tree: RMSE: " + regressor_tree_results._2 + " Time: " + regressor_tree_results._3 + "s")
+
+        val gb_trees_results = train_gradient_boosted_trees(training_set, validation_set, "ltr_features", "relevance")
+        println("Gradient Boosted Trees: RMSE: " + gb_trees_results._2 + " Time: " + gb_trees_results._3 + "s")
 
         // Write results on true test set
         regressor_tree_results._1.transform(processed_test_df).select("id", "prediction").write.csv("results")
     }
 
-    def train_regressor_tree(training_set: DataFrame, test_set: DataFrame) = {
+    def train_regressor_tree(training_set: DataFrame, test_set: DataFrame, features: String, labels: String) = {
         val t0 = System.currentTimeMillis()
 
         // Train model
         val rf = new DecisionTreeRegressor()
+            .setLabelCol(labels)
+            .setFeaturesCol(features)
+            .fit(training_set)
+
+        // Get predictions
+        val predictions = rf.transform(test_set)
+
+        // Evaluate model
+        val evaluator = new RegressionEvaluator()
             .setLabelCol("relevance")
-            .setFeaturesCol("features")
+            .setPredictionCol("prediction")
+            .setMetricName("rmse")
+
+        val rmse = evaluator.evaluate(predictions)
+
+        val t1 = System.currentTimeMillis()
+
+        (rf, rmse, (t1-t0)/1000)
+    }
+
+    def train_gradient_boosted_trees(training_set: DataFrame, test_set: DataFrame, features: String, labels: String) = {
+        val t0 = System.currentTimeMillis()
+
+        // Train model
+        val rf = new GBTRegressor()
+            .setLabelCol(labels)
+            .setFeaturesCol(features)
             .fit(training_set)
 
         // Get predictions
