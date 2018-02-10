@@ -10,6 +10,15 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 
 object Main {
 
+    // Helper function to delete directory if it exists
+    def delete(dir: String): Unit = {
+        val file = new File(dir)
+        if (file.isDirectory)
+            file.listFiles().foreach(f => delete(f.getAbsolutePath))
+        if (file.exists && !file.delete)
+            throw new Exception(s"Unable to delete ${file.getAbsolutePath}")
+    }
+
     def main(args: Array[String]): Unit = {
         // This function should be moved to a new file, which will be the entry point to the program
         val spark = SparkSession
@@ -31,7 +40,7 @@ object Main {
         val toDouble = udf[Double, String]( _.toDouble)
 
         // Read training set
-        val train_rel_str = read_data("data/train_small.csv", "data/attributes.csv", "data/product_descriptions.csv")
+        val train_rel_str = read_data("data/train.csv", "data/attributes.csv", "data/product_descriptions.csv")
             .toDF(train_col_names: _*)
 
         // Cast relevance to double
@@ -41,7 +50,7 @@ object Main {
             .withColumnRenamed("rel_num", "relevance")
 
         // Read test set
-        val test = read_data("data/test_small.csv", "data/attributes.csv", "data/product_descriptions.csv")
+        val test = read_data("data/test.csv", "data/attributes.csv", "data/product_descriptions.csv")
             .toDF(test_col_names:_*)
 
         // Process training set
@@ -62,6 +71,7 @@ object Main {
         println("Gradient Boosted Trees: RMSE: " + gb_trees_results._2 + " Time: " + gb_trees_results._3 + "s")
 
         // Write results on true test set
+        delete("results")
         regressor_tree_results._1.transform(processed_test_df).select("id", "prediction").write.csv("results")
     }
 
