@@ -1,115 +1,43 @@
-import org.apache.spark.sql.{Column, DataFrame, SparkSession}
-import org.apache.spark.sql.functions._
-import org.apache.spark.ml.feature.StopWordsRemover
-import org.apache.spark.ml.feature.HashingTF
-import org.apache.spark.ml.feature.IDF
-import org.apache.spark.ml.feature.Tokenizer
-import org.apache.spark.ml.feature.VectorAssembler
-import org.apache.spark.ml.linalg.{DenseVector, SparseVector}
-import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
+package queryanswerevaluation
+
 import breeze.linalg.functions.cosineDistance
-import org.apache.log4j.Logger
-import org.apache.log4j.Level
-import org.apache.spark.ml.Pipeline
-import org.apache.spark.ml.evaluation.RegressionEvaluator
-import org.apache.spark.ml.regression.RandomForestRegressor
-import org.apache.spark.ml.regression.DecisionTreeRegressor
-import org.apache.spark.ml.regression.LinearRegression
+import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
+import org.apache.spark.ml.feature._
+import org.apache.spark.ml.linalg.{DenseVector, SparseVector}
 import org.apache.spark.mllib.feature.Stemmer
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.{DataFrame, SparkSession}
 
 object DataProcessor {
-
-    def main(args: Array[String]): Unit = {
-        // This function should be moved to a new file, which will be the entry point to the program
-
-        val t0 = System.currentTimeMillis()
-
-        Logger.getLogger("org").setLevel(Level.OFF)
-        Logger.getLogger("akka").setLevel(Level.OFF)
-
-        val toDouble = udf[Double, String]( _.toDouble)
-
-        // Read training set
-        val train_rel_str = read_data("data/train.csv", "data/attributes.csv", "data/product_descriptions.csv")
-          .toDF("product_uid", "id",
-              "product_title", "search_term",
-              "relevance", "product_attributes",
-              "product_description")
-
-        // Cast relevance to double
-        val train = train_rel_str.withColumn("rel_num", toDouble(train_rel_str.col("relevance"))).drop("relevance").withColumnRenamed("rel_num", "relevance")
-//
-//        val test = read_data("data/test.csv", "data/attributes.csv", "data/product_descriptions.csv").toDF("product_uid", "id", "product_title",
-//            "search_term", "product_attributes", "product_description")
-
-        // Process training set
-        val processed_train_df = process_data(train)
-//        val processed_test_df = process_data(test)
-
-        processed_train_df.show(10)
-//        processed_test_df.show(10)
-
-        // Split into training and validation set - 70%/30%
-        val split = processed_train_df.randomSplit(Array(0.7, 0.3), seed=42)
-
-        val training_set = split(0)
-        val validation_set = split(1)
-
-        // Train model
-        val rf = new DecisionTreeRegressor()
-            .setLabelCol("relevance")
-            .setFeaturesCol("features")
-            .fit(training_set)
-
-        // Get predictions
-        val predictions = rf.transform(validation_set)
-
-        // Evaluate model
-        val evaluator = new RegressionEvaluator()
-            .setLabelCol("relevance")
-            .setPredictionCol("prediction")
-            .setMetricName("rmse")
-
-        val rmse = evaluator.evaluate(predictions)
-
-        val t1 = System.currentTimeMillis()
-
-        println("Execution time: " + (t1-t0)/1000 + "s")
-        println("Root Mean Squared Error (RMSE) on test data = " + rmse)
-
-    }
 
     /***
       * Reads data from CSV files and returns 2 DataFrames
       * First DataFrame contains: (id, product_uid, search_term, relevance)
       * Second DataFrame contains: (product_uid, product_description, product_attributes, product_title)
-      * @param train_csv train.csv
+      * @param csv_file train.csv
       * @param attributes_csv attributes.csv
       * @param descriptions_csv product_descriptions.csv
       * @return Tuple with the 2 DataFrames
       */
-    def read_data(train_csv: String, attributes_csv: String, descriptions_csv: String): DataFrame = {
+    def read_data(csv_file: String, attributes_csv: String, descriptions_csv: String): DataFrame = {
         val spark = SparkSession
             .builder()
             .master("local")
             .appName("RelevancePrediction")
             .getOrCreate()
 
-        val train_df = spark.read.format("csv").option("header", "true").csv(train_csv)
+        val csv_df = spark.read.format("csv").option("header", "true").csv(csv_file)
 
         val attributes_df = spark.read.format("csv").option("header", "true").csv(attributes_csv)
         val attributes_df_grouped = attributes_df.groupBy(attributes_df.col("product_uid")).agg(concat_ws(" ", collect_list(columnName = "value")))
         val descriptions_df = spark.read.format("csv").option("header", "true").csv(descriptions_csv)
-//
-//        val train_df_without_product_names = train_df.select("id", "product_uid", "search_term", "relevance")
-//        val train_df_product_names = train_df.select("product_uid", "product_title").dropDuplicates("product_uid")
 
-        val train = train_df
+        val final_df = csv_df
             .join(attributes_df_grouped, Seq("product_uid"), "left_outer")
             .join(descriptions_df, Seq("product_uid"), "left_outer")
             .na.fill("")
 
-        train
+        final_df
     }
 
     def process_data(products: DataFrame): DataFrame = {
