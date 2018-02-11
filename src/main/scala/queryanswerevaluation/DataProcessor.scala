@@ -2,6 +2,7 @@ package queryanswerevaluation
 
 import breeze.linalg.functions.{cosineDistance, euclideanDistance, tanimotoDistance}
 import breeze.linalg.{DenseVector => BDV, SparseVector => BSV, Vector => BV}
+import org.apache.spark.SparkConf
 import org.apache.spark.ml.feature._
 import org.apache.spark.ml.linalg.{DenseVector, SparseVector, Vectors}
 import org.apache.spark.mllib.feature.Stemmer
@@ -10,7 +11,7 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 
 object DataProcessor {
     // User Defined Function to calculate ltr_features between two columns
-    val udf_ltr = udf((vec1: DenseVector, vec2: DenseVector) => {
+    val udf_sims = udf((vec1: DenseVector, vec2: DenseVector) => {
         val vec_1_bdv = BDV(vec1.toDense.toArray)
         val vec_2_bdv = BDV(vec2.toDense.toArray)
 
@@ -19,6 +20,18 @@ object DataProcessor {
             1 - tanimotoDistance(vec_1_bdv, vec_2_bdv))
 
         Vectors.dense(sims.toArray)
+    })
+
+    val udf_token_existence = udf((search_term: String, product_txt: String) => {
+        // Count how many times tokens from search term appear in product_txt (attributes, description or title)
+        var count = 0
+        search_term.split(" ").foreach(term => {
+            if (product_txt.contains(term)) {
+                count = count + 1
+            }
+        })
+
+        count
     })
 
     /***
@@ -31,11 +44,13 @@ object DataProcessor {
       * @return Tuple with the 2 DataFrames
       */
     def read_data(csv_file: String, attributes_csv: String, descriptions_csv: String): DataFrame = {
-        val spark = SparkSession
-            .builder()
-            .master("local")
-            .appName("RelevancePrediction")
-            .getOrCreate()
+        val conf = new SparkConf()
+            .setAppName("RelevancePrediction")
+            .setMaster("local[4]")
+            .set("spark.executor.memory", "1g")
+            .set("spark.driver.memory", "6g")
+        val spark = SparkSession.builder().config(conf).getOrCreate()
+
 
         val csv_df = spark.read.format("csv").option("header", "true").csv(csv_file)
 
@@ -92,7 +107,6 @@ object DataProcessor {
             val tf = hash_tf.transform(stemmed)
             val idf_fit = idf.fit(tf)
             val processed_col_df = idf_fit.transform(tf)
-                .drop(col_name)
                 .drop(col_name+"_tokenized")
                 .drop(col_name+"_clean")
                 .drop(col_name+"_stemmed")
@@ -109,13 +123,18 @@ object DataProcessor {
         val tfidf = dfs(count)
         // Calculate similarities
         val sims = tfidf
-            .withColumn("search_term_title_sims", udf_ltr(tfidf.col("search_term_tfidf"), tfidf.col("product_title_tfidf")))
-            .withColumn("search_term_desc_sims", udf_ltr(tfidf.col("search_term_tfidf"), tfidf.col("product_description_tfidf")))
-            .withColumn("search_term_attr_sims", udf_ltr(tfidf.col("search_term_tfidf"), tfidf.col("product_attributes_tfidf")))
+            .withColumn("search_term_title_sims", udf_sims(tfidf.col("search_term_tfidf"), tfidf.col("product_title_tfidf")))
+            .withColumn("search_term_desc_sims", udf_sims(tfidf.col("search_term_tfidf"), tfidf.col("product_description_tfidf")))
+            .withColumn("search_term_attr_sims", udf_sims(tfidf.col("search_term_tfidf"), tfidf.col("product_attributes_tfidf")))
+            .withColumn("search_term_title_occurrence", udf_token_existence(tfidf.col("search_term"), tfidf.col("product_title")))
+            .withColumn("search_term_description_occurrence", udf_token_existence(tfidf.col("search_term"), tfidf.col("product_description")))
+            .withColumn("search_term_attribute_occurrence", udf_token_existence(tfidf.col("search_term"), tfidf.col("product_attributes")))
+            .drop(col_names: _*)
 
         // Assemble similarities in vector
         val assembler = new VectorAssembler()
-            .setInputCols(Array("search_term_title_sims", "search_term_desc_sims", "search_term_attr_sims"))
+            .setInputCols(Array("search_term_title_sims", "search_term_desc_sims", "search_term_attr_sims",
+                "search_term_title_occurrence", "search_term_description_occurrence", "search_term_attribute_occurrence"))
             .setOutputCol("ltr_features")
 
         // Transform and return result
