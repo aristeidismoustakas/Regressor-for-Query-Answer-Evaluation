@@ -16,7 +16,7 @@ object DataProcessor {
         val vec_2_bdv = BDV(vec2.toDense.toArray)
 
         val sims = List(1 - cosineDistance(vec_1_bdv, vec_2_bdv),
-            1 - euclideanDistance(vec_1_bdv, vec_2_bdv),
+            1 / (1 + euclideanDistance(vec_1_bdv, vec_2_bdv)),
             1 - tanimotoDistance(vec_1_bdv, vec_2_bdv))
 
         Vectors.dense(sims.toArray)
